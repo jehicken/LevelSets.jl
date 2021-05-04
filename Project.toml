@@ -1,0 +1,13 @@
+name = "LevelSets"
+uuid = "58fa33c0-cb2d-470c-b808-3ecdcdf44c1b"
+authors = ["Jason Hicken <hickej2@rpi.edu> and contributors"]
+version = "0.1.0"
+
+[compat]
+julia = "1.6"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
