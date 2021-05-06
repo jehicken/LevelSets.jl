@@ -3,6 +3,9 @@ uuid = "58fa33c0-cb2d-470c-b808-3ecdcdf44c1b"
 authors = ["Jason Hicken <hickej2@rpi.edu> and contributors"]
 version = "0.1.0"
 
+[deps]
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+
 [compat]
 julia = "1.6"
 
