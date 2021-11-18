@@ -2,20 +2,19 @@
 module LevelSets
 
 using LinearAlgebra
+using StaticArrays
 
 export LevelSet, evallevelset, difflevelset!, fitlevelset!
 export boundlevelset, boundlevelsetgrad!
 
 "Data required by smooth-max level-set function."
-mutable struct LevelSet{T<:Number}
-    "Number of spatial dimensions the level-set is embedded in."
-    dim::Int 
+mutable struct LevelSet{Dim,T<:Number}
     "Number of basis functions that define the level set."
     numbasis::Int
     "Centers for the basis functions."
-    xcenter::Array{T,2}
-    "Outward pointing normal at the centers."
-    normal::Array{T,2}
+    xcenter::Array{MVector{Dim,T},1}
+    "Normal and tangent(s) at the centers."
+    frame::Array{MVector{Dim,T},2}
     "Curvature at each point"
     kappa::Array{T,2}
     "Penalty parameter"
@@ -23,24 +22,97 @@ mutable struct LevelSet{T<:Number}
     "Parameter that smooths distance near zero"
     delta::T
 
-    function LevelSet{T}(xcenter::AbstractArray{T,2},
-                         normal::AbstractArray{T,2},
-                         kappa::AbstractArray{T,2},
-                         rho::T) where {T<:Number}
+    function LevelSet{Dim,T}(xcenter::AbstractArray{T,2},
+                             normal::AbstractArray{T,2},
+                             tangents::AbstractArray{T,3},
+                             kappa::AbstractArray{T,2},
+                             rho::T) where {Dim,T<:Number}
         @assert(size(xcenter) == size(normal),
                 "size of xcenter and normal do not match")
+        @assert(size(xcenter,2) == size(tangents,3) && 
+                size(xcenter,1) == size(tangents,1),
+                "size of xcenter and tangents do not match")
+        @assert(size(tangents,2) == Dim-1,
+                "number of tangents is inconsistent with dimension")
         dim = size(xcenter,1)
         numbasis = size(xcenter,2) 
-        xc = deepcopy(xcenter) 
-        # normalize the vectors in normal
-        nrm = deepcopy(normal)
-        @inbounds for i = 1:numbasis
-            nrm[:,i] /= norm(normal[:,i])
+        xc = zeros(MVector{Dim,T}, numbasis)
+        frm = zeros(MVector{Dim,T}, Dim, numbasis)
+        kap = zeros(T, (Dim-1, numbasis))
+        @inbounds for i = 1:numbasis 
+            xc[i] = xcenter[:,i] 
+            frm[1,i] = normal[:,i]/norm(normal[:,i])
+            for j = 1:Dim-1
+                frm[j+1,i] = tangents[:,j,i]
+                for k = 1:j 
+                    frm[j+1,i] -= dot(frm[j+1,i], frm[k,i])*frm[k,i]
+                end
+                frm[j+1,i] /= norm(frm[j+1,i])
+            end
+            kap[:,i] = kappa[:,i]
         end
-        kap = deepcopy(kappa)
         delta = 1e-10
-        new(dim, numbasis, xc, nrm, kap, rho, delta)
+        new(numbasis, xc, frm, kap, rho, delta)
     end 
+end
+
+"""
+    ls_local = locallevelset(x, xc, frame, kappa)
+
+Return a quadratic approximation to the level set based on given `xc`, `frame` 
+coordinate axes, and curvatures `kappa`.
+"""
+function locallevelset(x::AbstractArray{T,1}, xc::MVector{Dim,T},
+                       frame::AbstractArray{MVector{Dim,T},1},
+                       kappa::AbstractArray{T,1})::T where {Dim,T<:Number}
+    perp = dot(frame[1], x - xc)
+    for j = 1:Dim-1
+        perp += 0.5*kappa[j]*dot(frame[j+1], x - xc)^2
+    end
+    return perp
+end
+
+"""
+    difflocallevelset!(xc_bar, frame_bar, kappa_bar, x, xc, frame, kappa, perp_bar)
+
+Computes the dervatives of `locallevelset` with respect to `xc`, `frame`, and 
+`kappa`.  The derivatives are returned in the `_bar` variables and weighted by 
+`perp_bar`.
+"""
+function difflocallevelset!(xc_bar::MVector{Dim,T},
+                            frame_bar::AbstractArray{MVector{Dim,T},1},
+                            kappa_bar::AbstractArray{T,1},
+                            x::AbstractArray{T,1}, xc::MVector{Dim,T},
+                            frame::AbstractArray{MVector{Dim,T},1},
+                            kappa::AbstractArray{T,1},
+                            perp_bar::T) where {Dim,T<:Number}
+    for j = 1:Dim-1
+        # perp += 0.5*kappa[j]*dot(frame[j+1], x - xc)^2
+        dotprod = dot(frame[j+1], x - xc)
+        frame_bar[j+1] += perp_bar*kappa[j]*dotprod*(x - xc)
+        kappa_bar[j] += perp_bar*0.5*dotprod^2
+        xc_bar[:] -= perp_bar*kappa[j]*dotprod*frame[j+1]
+    end
+    # perp = dot(frame[1], x - xc)
+    xc_bar[:] -= perp_bar*frame[1]
+    frame_bar[1] += perp_bar*(x - xc)
+end
+
+"""
+    difflocallevelset!(x_bar, x, xc, frame, kappa, perp_bar)
+
+Computes the dervatives of `locallevelset` with respect to `x`.
+"""
+function difflocallevelset!(x_bar::AbstractArray{T,1},
+                            x::AbstractArray{T,1}, xc::MVector{Dim,T},
+                            frame::AbstractArray{MVector{Dim,T},1},
+                            kappa::AbstractArray{T,1}) where {Dim,T<:Number}
+    for j = 1:Dim-1
+        # perp += 0.5*kappa[j]*dot(frame[j+1], x - xc)^2
+        x_bar[:] = kappa[j]*dot(frame[j+1], x - xc)*frame[j+1]
+    end
+    # perp = dot(frame[1], x - xc)
+    x_bar[:] += frame[1]
 end
 
 """
@@ -49,53 +121,79 @@ end
 Return the level-set value at `x` defined by `levset`.
 """
 function evallevelset(x::AbstractArray{T,1},
-                      levset::LevelSet{T})::T where {T<:Number}
-    @assert(size(x,1) == size(levset.xcenter,1), "x inconsistent with levset")
+                      levset::LevelSet{Dim,T})::T where {Dim,T<:Number}
+    @assert(size(x,1) == Dim, "x inconsistent with levset")
     numer = zero(T)
     denom = zero(T)
     min_dist = 1e100
     @inbounds for i = 1:levset.numbasis 
-        xc = view(levset.xcenter, :, i)
+        xc = levset.xcenter[i]
         dist = sqrt(dot(x - xc, x - xc) + levset.delta)
         min_dist = min(min_dist, dist)
     end
     @inbounds for i = 1:levset.numbasis
-        xc = view(levset.xcenter, :, i)
+        xc = levset.xcenter[i]
+        frm = view(levset.frame, :, i)
+        crv = view(levset.kappa, :, i)
+        perp = locallevelset(x, xc, frm, crv)
         dist = sqrt(dot(x - xc, x - xc) + levset.delta)
-        perp = dot(levset.normal[:,i], x - xc)
-        # second order correction; need radius of curvature for this to work 
-        perp += 0.5*levset.kappa[1,i]*(x - xc)'*(I - levset.normal[:,i]*levset.normal[:,i]')*(x - xc)
         expfac = exp(-levset.rho*(dist - min_dist))
         numer += perp*expfac
         denom += expfac
     end
     ls = numer/denom
     return ls
+end
 
-    if false 
-    @inbounds for i = 1:levset.numbasis
+"""
+    findclosest!(x, x0, levset[, tol=1e-12, max_newton=10])
+
+Compute the point `x` that is on the zero level contour and closest to `x0`.
+"""
+function findclosest!(x::AbstractArray{T,1}, x0::AbstractArray{T,1},
+                      levset::LevelSet{T}; tol::Float64=1e-12,
+                      max_newton::Int=10) where {T<:Number}
+    @assert(size(x,1) == size(levset.xcenter,1), "x inconsistent with levset")
+    @assert(size(x0,1) == size(levset.xcenter,1), "x inconsistent with levset")
+    # use the closest center as the initial guess
+    min_dist = 1e100
+    min_idx = -1
+    @inbounds for i = 1:levset.numbasis 
         xc = view(levset.xcenter, :, i)
-        dist = sqrt(dot(x - xc, x - xc) + levset.delta)
-        perp = dot(levset.normal[:,i], x - xc)
-        # second order correction; need radius of curvature for this to work 
-        perp += 0.5*levset.kappa[1,i]*(x - xc)'*(I - levset.normal[:,i]*levset.normal[:,i]')*(x - xc)
-        expfac = exp(-levset.rho*dist)
-        numer += perp*expfac
-        denom += expfac
+        dist = sqrt(dot(x0 - xc, x0 - xc) + levset.delta)
+        if dist < min_dist 
+            min_dist = dist 
+            min_idx = i 
+        end
     end
-
-    # TEMP!!! Trying out specialized function for TE 
-    #xc = [1.0; 0.0]
-    #nrm = [0.9922778767136676; -0.12403473458920845]
-    #dist = sqrt(dot(x - xc, x- xc) + levset.delta)
-    #perp = dot(nrm, x - xc)
-    #expfac = exp(-levset.rho*dist)
-    #numer += ((1/tan(0.39/2))*sqrt(dist*dist - perp*perp) + perp)*expfac
-    #denom += expfac 
-
-    ls = numer/denom
-    return ls
-    end 
+    x[:] = levset.xcenter[:,min_idx]
+    x_bar = zero(x)
+    difflevelset!(x_bar, x, levset)
+    dim = levset.dim
+    A = zeros(T, (dim+1, dim+1))
+    for i = 1:dim
+        A[i,i] = one(T)
+    end
+    b = zeros(T, (dim+1))
+    dLdx = zeros(T, (dim))
+    # Solve the constrained minimization problem
+    lambda = 0.0
+    for n = 1:max_newton
+        A[1:dim,end] = x_bar 
+        A[end,1:dim] = x_bar
+        b[1:dim] = x0 - x
+        sol = A\b 
+        x += sol[1:dim]
+        lambda = sol[end]
+        # check the first-order optimality
+        difflevelset!(x_bar, x, levset)
+        dLdx = x - x0 + lambda*x_bar 
+        phi = evallevelset(x, levset)
+        if norm(dLdx) < tol && abs(phi) < tol 
+            return
+        end
+    end
+    error("Newton failed to converge in findclosest")
 end
 
 """
@@ -178,33 +276,44 @@ function boundlevelset(x::AbstractArray{T,1}, dx::AbstractArray{T,1},
 end 
 
 """
-    difflevelset!(xcenter_bar, normal_bar, rho_bar, x, levset)
+    difflevelset!(xcenter_bar, frame_bar, kappa_bar, rho_bar, x, levset)
 
 Compute the derivatives of the level set, defined by `levset`, at point `x`
 with respect to the `LevelSet` parameters.
 
 Uses the reverse-mode of algorithmic differentiation (i.e. back propagation).
 """
-function difflevelset!(xcenter_bar::AbstractArray{T,2},
-                       normal_bar::AbstractArray{T,2},
+function difflevelset!(xcenter_bar::AbstractArray{MVector{Dim,T},1},
+                       frame_bar::AbstractArray{MVector{Dim,T},2},
+                       kappa_bar::AbstractArray{T,2},
                        rho_bar::AbstractArray{T,1},
                        x::AbstractArray{T,1},
-                       levset::LevelSet{T}) where {T<:Number}
+                       levset::LevelSet{Dim,T}) where {Dim,T<:Number}
     @assert(size(xcenter_bar) == size(levset.xcenter),
             "xcenter_bar and levset.xcenter have inconsistent dimensions")
-    @assert(size(normal_bar) == size(levset.normal),
-            "normal_bar and levset.normal have inconsistent dimensions")
+    @assert(size(frame_bar) == size(levset.frame),
+            "frame_bar and levset.frame have inconsistent dimensions")
+    @assert(size(kappa_bar) == size(levset.kappa),
+            "kappa_bar and levset.kappa have inconsistent dimensions")
     @assert(size(rho_bar,1) == 1,
             "rho_bar should be a single element 1D array")
-    @assert(size(x,1) == size(levset.xcenter,1), "x inconsistent with levset")
+    @assert(size(x,1) == Dim, "x inconsistent with levset")
     # forward sweep 
     numer = zero(T)
     denom = zero(T)
-    @inbounds for i = 1:levset.numbasis
-        xc = view(levset.xcenter, :, i)
+    min_dist = 1e100
+    @inbounds for i = 1:levset.numbasis 
+        xc = levset.xcenter[i]
         dist = sqrt(dot(x - xc, x - xc) + levset.delta)
-        perp = dot(levset.normal[:,i], x - xc)
-        expfac = exp(-levset.rho*dist)
+        min_dist = min(min_dist, dist)
+    end
+    @inbounds for i = 1:levset.numbasis
+        xc = levset.xcenter[i]
+        frm = view(levset.frame, :, i)
+        crv = view(levset.kappa, :, i)
+        perp = locallevelset(x, xc, frm, crv)
+        dist = sqrt(dot(x - xc, x - xc) + levset.delta)
+        expfac = exp(-levset.rho*(dist - min_dist))
         numer += perp*expfac
         denom += expfac
     end
@@ -215,25 +324,27 @@ function difflevelset!(xcenter_bar::AbstractArray{T,2},
     numer_bar = ls_bar/denom 
     denom_bar = -ls_bar*ls/denom
     @inbounds for i = 1:levset.numbasis
-        xc = view(levset.xcenter, :, i)
+        xc = levset.xcenter[i] 
+        xc_bar = xcenter_bar[i]
+        frm = view(levset.frame, :, i)
+        frm_bar = view(frame_bar, :, i)
+        crv = view(levset.kappa, :, i)
+        crv_bar = view(kappa_bar,: , i)
+        perp = locallevelset(x, xc, frm, crv)
         dist = sqrt(dot(x - xc, x - xc) + levset.delta)
-        perp = dot(levset.normal[:,i], x - xc)
-        expfac = exp(-levset.rho*dist)
-        # denom += expfac
+        expfac = exp(-levset.rho*(dist - min_dist))
+        # denom += expfac 
         expfac_bar = denom_bar
-        # numer += perp*expfac 
+        # numer += perp*expfac
         perp_bar = numer_bar*expfac 
         expfac_bar += numer_bar*perp
-        # expfac = exp(-rho*dist)
+        # expfac = exp(-levset.rho*(dist - min_dist))
         rho_bar[1] -= expfac_bar*expfac*dist 
-        dist_bar = -expfac_bar*expfac*levset.rho
-        # perp = dot(levset.normal[:,i], x - xc)
-        normal_bar[:,i] += perp_bar.*(x - xc)
-        xc_bar = -perp_bar.*levset.normal[:,i] 
+        dist_bar = -expfac_bar*expfac*levset.rho 
+        # perp = locallevelset(x, xc, frm, crv)
+        difflocallevelset!(xc_bar, frm_bar, crv_bar, x, xc, frm, crv, perp_bar)
         # dist = sqrt(dot(x - xc, x - xc) + levset.delta)
-        xc_bar -= dist_bar.*(x - xc)./dist 
-        #xc = view(levset.xcenter, :, i)
-        xcenter_bar[:,i] += xc_bar
+        xc_bar[:] -= dist_bar.*(x - xc)./dist 
     end
     return nothing
 end
