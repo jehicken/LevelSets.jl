@@ -12,9 +12,9 @@ mutable struct LevelSet{Dim,T<:Number}
     "Number of basis functions that define the level set."
     numbasis::Int
     "Centers for the basis functions."
-    xcenter::Array{MVector{Dim,T},1}
+    xcenter::Array{T,2}
     "Normal and tangent(s) at the centers."
-    frame::Array{MVector{Dim,T},2}
+    frame::Array{T,3}
     "Curvature at each point"
     kappa::Array{T,2}
     "Penalty parameter"
@@ -36,20 +36,18 @@ mutable struct LevelSet{Dim,T<:Number}
                 "number of tangents is inconsistent with dimension")
         dim = size(xcenter,1)
         numbasis = size(xcenter,2) 
-        xc = zeros(MVector{Dim,T}, numbasis)
-        frm = zeros(MVector{Dim,T}, Dim, numbasis)
-        kap = zeros(T, (Dim-1, numbasis))
+        xc = deepcopy(xcenter)
+        kap = deepcopy(kappa)
+        frm = zeros(T, Dim, Dim, numbasis)
         @inbounds for i = 1:numbasis 
-            xc[i] = xcenter[:,i] 
-            frm[1,i] = normal[:,i]/norm(normal[:,i])
+            frm[:,1,i] = normal[:,i]/norm(normal[:,i])
             for j = 1:Dim-1
-                frm[j+1,i] = tangents[:,j,i]
+                frm[:,j+1,i] = tangents[:,j,i]
                 for k = 1:j 
-                    frm[j+1,i] -= dot(frm[j+1,i], frm[k,i])*frm[k,i]
+                    frm[:,j+1,i] -= dot(frm[:,j+1,i], frm[:,k,i])*frm[:,k,i]
                 end
-                frm[j+1,i] /= norm(frm[j+1,i])
+                frm[:,j+1,i] /= norm(frm[:,j+1,i])
             end
-            kap[:,i] = kappa[:,i]
         end
         delta = 1e-10
         new(numbasis, xc, frm, kap, rho, delta)
@@ -62,12 +60,12 @@ end
 Return a quadratic approximation to the level set based on given `xc`, `frame` 
 coordinate axes, and curvatures `kappa`.
 """
-function locallevelset(x::AbstractArray{T,1}, xc::MVector{Dim,T},
-                       frame::AbstractArray{MVector{Dim,T},1},
-                       kappa::AbstractArray{T,1})::T where {Dim,T<:Number}
-    perp = dot(frame[1], x - xc)
-    for j = 1:Dim-1
-        perp += 0.5*kappa[j]*dot(frame[j+1], x - xc)^2
+function locallevelset(x::AbstractArray{T,1}, xc::AbstractArray{T,1},
+                       frame::AbstractArray{T,2},
+                       kappa::AbstractArray{T,1})::T where {T<:Number}
+    perp = dot(frame[:,1], x - xc)
+    for j = 1:size(x,1)-1
+        perp += 0.5*kappa[j]*dot(frame[:,j+1], x - xc)^2
     end
     return perp
 end
@@ -79,40 +77,61 @@ Computes the dervatives of `locallevelset` with respect to `xc`, `frame`, and
 `kappa`.  The derivatives are returned in the `_bar` variables and weighted by 
 `perp_bar`.
 """
-function difflocallevelset!(xc_bar::MVector{Dim,T},
-                            frame_bar::AbstractArray{MVector{Dim,T},1},
+function difflocallevelset!(xc_bar::AbstractArray{T,1},
+                            frame_bar::AbstractArray{T,2},
                             kappa_bar::AbstractArray{T,1},
-                            x::AbstractArray{T,1}, xc::MVector{Dim,T},
-                            frame::AbstractArray{MVector{Dim,T},1},
+                            x::AbstractArray{T,1}, xc::AbstractArray{T,1},
+                            frame::AbstractArray{T,2},
                             kappa::AbstractArray{T,1},
-                            perp_bar::T) where {Dim,T<:Number}
-    for j = 1:Dim-1
-        # perp += 0.5*kappa[j]*dot(frame[j+1], x - xc)^2
-        dotprod = dot(frame[j+1], x - xc)
-        frame_bar[j+1] += perp_bar*kappa[j]*dotprod*(x - xc)
+                            perp_bar::T) where {T<:Number}
+    for j = 1:size(x,1)-1
+        # perp += 0.5*kappa[j]*dot(frame[:,j+1], x - xc)^2
+        dotprod = dot(frame[:,j+1], x - xc)
+        frame_bar[:,j+1] += perp_bar*kappa[j]*dotprod*(x - xc)
         kappa_bar[j] += perp_bar*0.5*dotprod^2
-        xc_bar[:] -= perp_bar*kappa[j]*dotprod*frame[j+1]
+        xc_bar[:] -= perp_bar*kappa[j]*dotprod*frame[:,j+1]
     end
-    # perp = dot(frame[1], x - xc)
-    xc_bar[:] -= perp_bar*frame[1]
-    frame_bar[1] += perp_bar*(x - xc)
+    # perp = dot(frame[:,1], x - xc)
+    xc_bar[:] -= perp_bar*frame[:,1]
+    frame_bar[:,1] += perp_bar*(x - xc)
 end
 
 """
     difflocallevelset!(x_bar, x, xc, frame, kappa, perp_bar)
 
-Computes the dervatives of `locallevelset` with respect to `x`.
+Computes the dervatives of `locallevelset` with respect to `x`.  The 
+derivatives are returned in `x_bar` and are weighted by `perp_bar`
 """
 function difflocallevelset!(x_bar::AbstractArray{T,1},
-                            x::AbstractArray{T,1}, xc::MVector{Dim,T},
-                            frame::AbstractArray{MVector{Dim,T},1},
-                            kappa::AbstractArray{T,1}) where {Dim,T<:Number}
-    for j = 1:Dim-1
-        # perp += 0.5*kappa[j]*dot(frame[j+1], x - xc)^2
-        x_bar[:] = kappa[j]*dot(frame[j+1], x - xc)*frame[j+1]
+                            x::AbstractArray{T,1}, xc::AbstractArray{T,1},
+                            frame::AbstractArray{T,2},
+                            kappa::AbstractArray{T,1},
+                            perp_bar::T) where {T<:Number}
+    for j = 1:size(x,1)-1
+        # perp += 0.5*kappa[j]*dot(frame[:,j+1], x - xc)^2
+        x_bar[:] += perp_bar*kappa[j]*dot(frame[:,j+1], x - xc)*frame[:,j+1]
     end
     # perp = dot(frame[1], x - xc)
-    x_bar[:] += frame[1]
+    x_bar[:] += perp_bar*frame[:,1]
+end
+
+"""
+    hesslocallevelset!(hess, x, xc, frame, kappa)
+
+Computes the Hessian of `locallevelset` with repsect to `x`.  Note that `xc` and
+`x` are provided but not actually used; quadatic level-set is constant.  We'll
+keep this interface in case higher-order local level-sets are used in the 
+future.
+"""
+function hesslocallevelset!(hess::AbstractArray{T,2},
+                            x::AbstractArray{T,1}, xc::AbstractArray{T,1},
+                            frame::AbstractArray{T,2},
+                            kappa::AbstractArray{T,1}) where {T<:Number}
+    fill!(hess, zero(T))
+    for j = 1:size(x,1)-1
+        # x_bar[:] += perp_bar*kappa[j]*dot(frame[:,j+1], x - xc)*frame[:,j+1]
+        hess[:,:] += kappa[j]*frame[:,j+1]*frame[:,j+1]'
+    end
 end
 
 """
@@ -127,13 +146,13 @@ function evallevelset(x::AbstractArray{T,1},
     denom = zero(T)
     min_dist = 1e100
     @inbounds for i = 1:levset.numbasis 
-        xc = levset.xcenter[i]
+        xc = view(levset.xcenter, :, i)
         dist = sqrt(dot(x - xc, x - xc) + levset.delta)
         min_dist = min(min_dist, dist)
     end
     @inbounds for i = 1:levset.numbasis
-        xc = levset.xcenter[i]
-        frm = view(levset.frame, :, i)
+        xc = view(levset.xcenter, :, i)
+        frm = view(levset.frame, :, :, i)
         crv = view(levset.kappa, :, i)
         perp = locallevelset(x, xc, frm, crv)
         dist = sqrt(dot(x - xc, x - xc) + levset.delta)
@@ -151,10 +170,10 @@ end
 Compute the point `x` that is on the zero level contour and closest to `x0`.
 """
 function findclosest!(x::AbstractArray{T,1}, x0::AbstractArray{T,1},
-                      levset::LevelSet{T}; tol::Float64=1e-12,
-                      max_newton::Int=10) where {T<:Number}
-    @assert(size(x,1) == size(levset.xcenter,1), "x inconsistent with levset")
-    @assert(size(x0,1) == size(levset.xcenter,1), "x inconsistent with levset")
+                      levset::LevelSet{Dim,T}; tol::Float64=1e-12,
+                      max_newton::Int=10) where {Dim,T<:Number}
+    @assert(size(x,1) == Dim, "x inconsistent with levset")
+    @assert(size(x0,1) == Dim, "x inconsistent with levset")
     # use the closest center as the initial guess
     min_dist = 1e100
     min_idx = -1
@@ -168,30 +187,38 @@ function findclosest!(x::AbstractArray{T,1}, x0::AbstractArray{T,1},
     end
     x[:] = levset.xcenter[:,min_idx]
     x_bar = zero(x)
-    difflevelset!(x_bar, x, levset)
-    dim = levset.dim
-    A = zeros(T, (dim+1, dim+1))
-    for i = 1:dim
+    A = zeros(T, (Dim+1, Dim+1))
+    for i = 1:Dim
         A[i,i] = one(T)
     end
-    b = zeros(T, (dim+1))
-    dLdx = zeros(T, (dim))
+    b = zeros(T, (Dim+1))
     # Solve the constrained minimization problem
-    lambda = 0.0
+    hess = view(A, 1:Dim, 1:Dim)
+    xc = view(levset.xcenter, :, min_idx)
+    frm = view(levset.frame, :, :, min_idx)
+    crv = view(levset.kappa, :, min_idx)
+    lambda = zero(T)
     for n = 1:max_newton
-        A[1:dim,end] = x_bar 
-        A[end,1:dim] = x_bar
-        b[1:dim] = x0 - x
-        sol = A\b 
-        x += sol[1:dim]
-        lambda = sol[end]
-        # check the first-order optimality
+        # check for convergence
         difflevelset!(x_bar, x, levset)
-        dLdx = x - x0 + lambda*x_bar 
         phi = evallevelset(x, levset)
-        if norm(dLdx) < tol && abs(phi) < tol 
+        b[1:Dim] = x0 - x - lambda*x_bar
+        b[end] = -phi
+        println("iter: ",n,": norm(dLdx) = ",norm(b[1:Dim]),": phi = ",-b[end])
+        if norm(b[1:Dim]) < tol && abs(phi) < tol 
             return
         end
+        hesslocallevelset!(hess, x, xc, frm, crv)
+        #A[1:Dim,1:Dim] += I
+        for i = 1:Dim
+            A[i,i] += one(T)
+        end 
+
+        A[1:Dim,end] = x_bar
+        A[end,1:Dim] = x_bar
+        sol = A\b
+        x += sol[1:Dim]
+        lambda += sol[end]
     end
     error("Newton failed to converge in findclosest")
 end
@@ -283,8 +310,8 @@ with respect to the `LevelSet` parameters.
 
 Uses the reverse-mode of algorithmic differentiation (i.e. back propagation).
 """
-function difflevelset!(xcenter_bar::AbstractArray{MVector{Dim,T},1},
-                       frame_bar::AbstractArray{MVector{Dim,T},2},
+function difflevelset!(xcenter_bar::AbstractArray{T,2},
+                       frame_bar::AbstractArray{T,3},
                        kappa_bar::AbstractArray{T,2},
                        rho_bar::AbstractArray{T,1},
                        x::AbstractArray{T,1},
@@ -303,13 +330,13 @@ function difflevelset!(xcenter_bar::AbstractArray{MVector{Dim,T},1},
     denom = zero(T)
     min_dist = 1e100
     @inbounds for i = 1:levset.numbasis 
-        xc = levset.xcenter[i]
+        xc = view(levset.xcenter, :, i)
         dist = sqrt(dot(x - xc, x - xc) + levset.delta)
         min_dist = min(min_dist, dist)
     end
     @inbounds for i = 1:levset.numbasis
-        xc = levset.xcenter[i]
-        frm = view(levset.frame, :, i)
+        xc = view(levset.xcenter, :, i)
+        frm = view(levset.frame, :, :, i)
         crv = view(levset.kappa, :, i)
         perp = locallevelset(x, xc, frm, crv)
         dist = sqrt(dot(x - xc, x - xc) + levset.delta)
@@ -324,10 +351,10 @@ function difflevelset!(xcenter_bar::AbstractArray{MVector{Dim,T},1},
     numer_bar = ls_bar/denom 
     denom_bar = -ls_bar*ls/denom
     @inbounds for i = 1:levset.numbasis
-        xc = levset.xcenter[i] 
-        xc_bar = xcenter_bar[i]
-        frm = view(levset.frame, :, i)
-        frm_bar = view(frame_bar, :, i)
+        xc = view(levset.xcenter, :, i)
+        xc_bar = view(xcenter_bar, :, i)
+        frm = view(levset.frame, :, :, i)
+        frm_bar = view(frame_bar, :, :, i)
         crv = view(levset.kappa, :, i)
         crv_bar = view(kappa_bar,: , i)
         perp = locallevelset(x, xc, frm, crv)
@@ -358,10 +385,10 @@ with respect to `x`.  The derivatives are stored in `x_bar`.
 Uses the reverse-mode of algorithmic differentiation (i.e. back propagation).
 """
 function difflevelset!(x_bar::AbstractArray{T,1}, x::AbstractArray{T,1},
-                       levset::LevelSet{T}) where {T<:Number}
+                       levset::LevelSet{Dim,T}) where {Dim,T<:Number}
     @assert(size(x_bar) == size(x),
             "x_bar and x have inconsistent dimensions")
-    @assert(size(x,1) == size(levset.xcenter,1), "x inconsistent with levset")
+    @assert(size(x,1) == Dim, "x inconsistent with levset")
     # forward sweep 
     numer = zero(T)
     denom = zero(T)
@@ -373,9 +400,10 @@ function difflevelset!(x_bar::AbstractArray{T,1}, x::AbstractArray{T,1},
     end
     @inbounds for i = 1:levset.numbasis
         xc = view(levset.xcenter, :, i)
+        frm = view(levset.frame, :, :, i)
+        crv = view(levset.kappa, :, i)
+        perp = locallevelset(x, xc, frm, crv)
         dist = sqrt(dot(x - xc, x - xc) + levset.delta)
-        perp = dot(levset.normal[:,i], x - xc)
-        #expfac = exp(-levset.rho*dist)
         expfac = exp(-levset.rho*(dist - min_dist))
         numer += perp*expfac
         denom += expfac
@@ -390,8 +418,10 @@ function difflevelset!(x_bar::AbstractArray{T,1}, x::AbstractArray{T,1},
     denom_bar = -ls_bar*ls/denom
     @inbounds for i = 1:levset.numbasis
         xc = view(levset.xcenter, :, i)
+        frm = view(levset.frame, :, :, i)
+        crv = view(levset.kappa, :, i)
+        perp = locallevelset(x, xc, frm, crv)
         dist = sqrt(dot(x - xc, x - xc) + levset.delta)
-        perp = dot(levset.normal[:,i], x - xc)
         expfac = exp(-levset.rho*(dist - min_dist))
         # denom += expfac
         expfac_bar = denom_bar
@@ -400,12 +430,28 @@ function difflevelset!(x_bar::AbstractArray{T,1}, x::AbstractArray{T,1},
         expfac_bar += numer_bar*perp
         # expfac = exp(-levset.rho*(dist - min_dist))
         dist_bar = -expfac_bar*expfac*levset.rho
-        # perp = dot(levset.normal[:,i], x - xc)
-        x_bar[:] += perp_bar.*levset.normal[:,i] 
         # dist = sqrt(dot(x - xc, x - xc) + levset.delta)
         x_bar[:] += dist_bar.*(x - xc)./dist
+        # perp = locallevelset(x, xc, frm, crv)
+        difflocallevelset!(x_bar, x, xc, frm, crv, perp_bar)        
     end
     return nothing
+end
+
+"""
+    hessianlevelset!(hess, x, levset)
+
+Compute the Hessian of the level set, defined by `levset`, at point `x`
+with respect to `x`.  The derivatives are stored in `hess`.
+"""
+function hessianlevelset!(hess::AbstractArray{T,2}, x::AbstractArray{T,1},
+                          levset::LevelSet{Dim,T}) where {Dim,T<:Number}
+    @assert(size(hess,1) == size(hess,2) == size(x,1),
+        "hess and x have inconsistent dimensions")
+    @assert(size(x,1) == Dim, "x inconsistent with levset")
+
+    
+
 end
 
 """
