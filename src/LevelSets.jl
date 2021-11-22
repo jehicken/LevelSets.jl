@@ -4,7 +4,7 @@ module LevelSets
 using LinearAlgebra
 using StaticArrays
 
-export LevelSet, evallevelset, difflevelset!, fitlevelset!
+export LevelSet, evallevelset, difflevelset!, hessianlevelset!, fitlevelset!
 export boundlevelset, boundlevelsetgrad!
 
 "Data required by smooth-max level-set function."
@@ -52,6 +52,52 @@ mutable struct LevelSet{Dim,T<:Number}
         delta = 1e-10
         new(numbasis, xc, frm, kap, rho, delta)
     end 
+end
+
+"""
+    expfac = expdist(x, xc, rho, delta, min_dist)
+
+Computes the exponential of the scaled distance from `x` to `xc`.  The distance 
+is regularized by adding `delta` to the dot product of `x - xc`; this helps 
+with derivatives when `norm(x - xc)` is small.  The scalar `-rho` scales the 
+difference between this regularized distance and some reference `min_dist`.
+"""
+function expdist(x::AbstractArray{T,1}, xc::AbstractArray{T,1},
+                 rho::T, delta::T, min_dist::T)::T where {T<:Number}
+    dist = sqrt(dot(x - xc, x - xc) + delta)
+    return exp(-rho*(dist - min_dist))
+end
+
+"""
+    diffexpdist!(x_bar, x, xc, rho, delta, min_dist, exp_bar)
+
+Computes the derivative of `expdist` with respect to `x` and returns the result
+in the array `x_bar`.  The derivative is weighted by `exp_bar`.
+"""
+function diffexpdist!(x_bar::AbstractArray{T,1}, x::AbstractArray{T,1}, 
+                      xc::AbstractArray{T,1}, rho::T, delta::T, min_dist::T, exp_bar::T) where {T<:Number}
+    # forward sweep
+    dist = sqrt(dot(x - xc, x - xc) + delta)
+    # return exp(-rho*(dist - min_dist)) 
+    dist_bar = -exp_bar*rho*exp(-rho*(dist - min_dist))
+    # dist = sqrt(dot(x - xc, x - xc) + delta)
+    x_bar[:] += (dist_bar/dist)*(x - xc)
+end
+
+"""
+    hessexpdist!(hess, x, xc, rho, delta, min_dist)
+
+Computes the Hessian of `expdist` with respect to `x` and returns the result
+in the array `hess`.  
+"""
+function hessexpdist!(hess::AbstractArray{T,2}, x::AbstractArray{T,1}, 
+                      xc::AbstractArray{T,1}, rho::T, delta::T,
+                      min_dist::T) where {T<:Number}
+    dx = x - xc # allocation!!!
+    dist2 = dot(dx, dx) + delta
+    dist = sqrt(dist2)
+    expfac = exp(-rho*(dist - min_dist))
+    hess[:,:] = (rho*expfac/dist2)*( (one(T)/dist + rho)*dx*dx' - dist*I )
 end
 
 """
@@ -155,8 +201,7 @@ function evallevelset(x::AbstractArray{T,1},
         frm = view(levset.frame, :, :, i)
         crv = view(levset.kappa, :, i)
         perp = locallevelset(x, xc, frm, crv)
-        dist = sqrt(dot(x - xc, x - xc) + levset.delta)
-        expfac = exp(-levset.rho*(dist - min_dist))
+        expfac = expdist(x, xc, levset.rho, levset.delta, min_dist)
         numer += perp*expfac
         denom += expfac
     end
@@ -200,6 +245,7 @@ function findclosest!(x::AbstractArray{T,1}, x0::AbstractArray{T,1},
     lambda = zero(T)
     for n = 1:max_newton
         # check for convergence
+        fill!(x_bar, zero(T))
         difflevelset!(x_bar, x, levset)
         phi = evallevelset(x, levset)
         b[1:Dim] = x0 - x - lambda*x_bar
@@ -208,16 +254,17 @@ function findclosest!(x::AbstractArray{T,1}, x0::AbstractArray{T,1},
         if norm(b[1:Dim]) < tol && abs(phi) < tol 
             return
         end
-        hesslocallevelset!(hess, x, xc, frm, crv)
+        fill!(A, zero(T))
+        hessianlevelset!(hess, x, levset)
+        hess[:,:] *= lambda
         #A[1:Dim,1:Dim] += I
         for i = 1:Dim
-            A[i,i] += one(T)
+            hess[i,i] += one(T)
         end 
-
         A[1:Dim,end] = x_bar
         A[end,1:Dim] = x_bar
         sol = A\b
-        x += sol[1:Dim]
+        x[:] += sol[1:Dim]
         lambda += sol[end]
     end
     error("Newton failed to converge in findclosest")
@@ -339,8 +386,7 @@ function difflevelset!(xcenter_bar::AbstractArray{T,2},
         frm = view(levset.frame, :, :, i)
         crv = view(levset.kappa, :, i)
         perp = locallevelset(x, xc, frm, crv)
-        dist = sqrt(dot(x - xc, x - xc) + levset.delta)
-        expfac = exp(-levset.rho*(dist - min_dist))
+        expfac = expdist(x, xc, levset.rho, levset.delta, min_dist)
         numer += perp*expfac
         denom += expfac
     end
@@ -359,12 +405,13 @@ function difflevelset!(xcenter_bar::AbstractArray{T,2},
         crv_bar = view(kappa_bar,: , i)
         perp = locallevelset(x, xc, frm, crv)
         dist = sqrt(dot(x - xc, x - xc) + levset.delta)
-        expfac = exp(-levset.rho*(dist - min_dist))
+        expfac = exp(-levset.rho*(dist - min_dist)) 
         # denom += expfac 
         expfac_bar = denom_bar
         # numer += perp*expfac
         perp_bar = numer_bar*expfac 
         expfac_bar += numer_bar*perp
+        # TODO: differentiate expdist w.r.t. xc and rho.
         # expfac = exp(-levset.rho*(dist - min_dist))
         rho_bar[1] -= expfac_bar*expfac*dist 
         dist_bar = -expfac_bar*expfac*levset.rho 
@@ -403,8 +450,7 @@ function difflevelset!(x_bar::AbstractArray{T,1}, x::AbstractArray{T,1},
         frm = view(levset.frame, :, :, i)
         crv = view(levset.kappa, :, i)
         perp = locallevelset(x, xc, frm, crv)
-        dist = sqrt(dot(x - xc, x - xc) + levset.delta)
-        expfac = exp(-levset.rho*(dist - min_dist))
+        expfac = expdist(x, xc, levset.rho, levset.delta, min_dist)
         numer += perp*expfac
         denom += expfac
     end
@@ -421,17 +467,15 @@ function difflevelset!(x_bar::AbstractArray{T,1}, x::AbstractArray{T,1},
         frm = view(levset.frame, :, :, i)
         crv = view(levset.kappa, :, i)
         perp = locallevelset(x, xc, frm, crv)
-        dist = sqrt(dot(x - xc, x - xc) + levset.delta)
-        expfac = exp(-levset.rho*(dist - min_dist))
+        expfac = expdist(x, xc, levset.rho, levset.delta, min_dist)
         # denom += expfac
         expfac_bar = denom_bar
         # numer += perp*expfac 
         perp_bar = numer_bar*expfac 
         expfac_bar += numer_bar*perp
-        # expfac = exp(-levset.rho*(dist - min_dist))
-        dist_bar = -expfac_bar*expfac*levset.rho
-        # dist = sqrt(dot(x - xc, x - xc) + levset.delta)
-        x_bar[:] += dist_bar.*(x - xc)./dist
+        # expfac = expdist(x, xc, levset.rho, levset.delta, min_dist)
+        diffexpdist!(x_bar, x, xc, levset.rho, levset.delta, min_dist,
+                     expfac_bar)
         # perp = locallevelset(x, xc, frm, crv)
         difflocallevelset!(x_bar, x, xc, frm, crv, perp_bar)        
     end
@@ -449,9 +493,75 @@ function hessianlevelset!(hess::AbstractArray{T,2}, x::AbstractArray{T,1},
     @assert(size(hess,1) == size(hess,2) == size(x,1),
         "hess and x have inconsistent dimensions")
     @assert(size(x,1) == Dim, "x inconsistent with levset")
+    min_dist = 1e100
+    @inbounds for i = 1:levset.numbasis 
+        xc = view(levset.xcenter, :, i)
+        dist = sqrt(dot(x - xc, x - xc) + levset.delta)
+        min_dist = min(min_dist, dist)
+    end
+    numer = zero(T)
+    denom = zero(T)
+    @inbounds for i = 1:levset.numbasis
+        xc = view(levset.xcenter, :, i)
+        frm = view(levset.frame, :, :, i)
+        crv = view(levset.kappa, :, i)
+        perp = locallevelset(x, xc, frm, crv)
+        expfac = expdist(x, xc, levset.rho, levset.delta, min_dist)
+        numer += perp*expfac
+        denom += expfac
+    end
+    ls = numer/denom
+    # start reverse sweep; here we compute both the first derivative, plus some 
+    # local contributions to the second derivative 
+    x_bar = zero(x) # <--- holds the first derivative of the whole level set
+    deriv_denom = zero(x) # derivative of denom with respect to x
+    deriv_local = zero(x) # work vector
+    deriv_expfac = zero(x) # work vector
+    hess_denom = zeros(T, Dim, Dim) # Hessian of denom with respect to x
+    hess_local = zero(hess_denom)
+    hess_expfac = zero(hess_denom)
+    # return ls
+    ls_bar = one(T)
+    # ls = numer/denom 
+    numer_bar = ls_bar/denom 
+    denom_bar = -ls_bar*ls/denom
+    fill!(hess, zero(T))
+    @inbounds for i = 1:levset.numbasis
+        xc = view(levset.xcenter, :, i)
+        frm = view(levset.frame, :, :, i)
+        crv = view(levset.kappa, :, i)
+        perp = locallevelset(x, xc, frm, crv)
+        expfac = expdist(x, xc, levset.rho, levset.delta, min_dist)
+        # denom += expfac
+        expfac_bar = denom_bar
+        # numer += perp*expfac 
+        perp_bar = numer_bar*expfac 
+        expfac_bar += numer_bar*perp
+        # expfac = expdist(x, xc, levset.rho, levset.delta, min_dist)
+        diffexpdist!(x_bar, x, xc, levset.rho, levset.delta, min_dist,
+                     expfac_bar)
+        # perp = locallevelset(x, xc, frm, crv)
+        difflocallevelset!(x_bar, x, xc, frm, crv, perp_bar)
+        
+        # the following computes local contributions to second derivative
+        fill!(deriv_local, zero(T))
+        fill!(deriv_expfac, zero(T))
+        difflocallevelset!(deriv_local, x, xc, frm, crv, one(T))
+        hesslocallevelset!(hess_local, x, xc, frm, crv)
+        diffexpdist!(deriv_expfac, x, xc, levset.rho, levset.delta, min_dist,
+                     one(T))
+        hessexpdist!(hess_expfac, x, xc, levset.rho, levset.delta, min_dist)
+        hess[:,:] += (hess_local*expfac + deriv_local*deriv_expfac' + 
+                      deriv_expfac*deriv_local' + perp*hess_expfac)
 
-    
-
+        # the following adds contributions to the derivatives of denom 
+        deriv_denom += deriv_expfac
+        hess_denom += hess_expfac 
+    end
+    hess[:,:] -= deriv_denom*x_bar'
+    hess[:,:] -= x_bar*deriv_denom'
+    hess[:,:] -= hess_denom*ls 
+    hess[:,:] /= denom
 end
 
 """

@@ -121,6 +121,97 @@ using StaticArrays
         end
     end
 
+    @testset "Test hesslocallevelset! (w.r.t. x)" begin 
+        difflocallevelset! = LevelSets.difflocallevelset!
+        hesslocallevelset! = LevelSets.hesslocallevelset!
+        dim = 3
+        x = randn(dim)
+        xc = randn(dim)
+        frm = randn(dim, dim)
+        crv = randn(dim-1)
+        # get the analytical Hessian 
+        hess = zeros(dim, dim)
+        hesslocallevelset!(hess, x, xc, frm, crv)
+        # get the Hessian using dual numbers
+        x_dual = dual.(x, 0.0)
+        xc_dual = dual.(xc, 0.0)
+        frm_dual = dual.(frm, 0.0)
+        crv_dual = dual.(crv, 0.0)
+        x_bar_dual = zero(x_dual)
+        for d = 1:dim 
+            # derivative w.r.t. x[d]
+            x_dual[d] += dual.(0.0, 1.0)
+            fill!(x_bar_dual, zero(Dual128))
+            difflocallevelset!(x_bar_dual, x_dual, xc_dual, frm_dual, crv_dual,
+                               dual.(1.0, 0.0))
+            for d2 = 1:dim
+                @test isapprox(hess[d,d2], epsilon.(x_bar_dual[d2]))
+            end 
+            x_dual[d] -= dual.(0.0, 1.0)
+        end
+    end
+
+    @testset "Test diffexpdist! (w.r.t. x)" begin 
+        expdist = LevelSets.expdist
+        diffexpdist! = LevelSets.diffexpdist!
+        dim = 3
+        delta = 1e-8
+        x = randn(dim)
+        xc = randn(dim)
+        rho = rand()
+        min_dist = rand()
+        exp_bar = randn()
+        # get the analytical derivative
+        x_bar = zero(x)
+        diffexpdist!(x_bar, x, xc, rho, delta, min_dist, exp_bar)
+        # get the derivatives using dual numbers
+        x_dual = dual.(x, 0.0)
+        xc_dual = dual.(xc, 0.0)
+        rho_dual = dual.(rho, 0.0)
+        delta_dual = dual.(delta, 0.0)
+        min_dist_dual = dual.(min_dist, 0.0)
+        for d = 1:dim 
+            # get derivative with respect to x[d]
+            x_dual[d] += dual.(0.0, exp_bar)
+            expfac_dual = expdist(x_dual, xc_dual, rho_dual, delta_dual,
+                                  min_dist_dual)
+            @test isapprox(x_bar[d], epsilon.(expfac_dual))
+            x_dual[d] -= dual.(0.0, exp_bar) 
+        end
+    end
+
+    @testset "Test hessexpdist! (w.r.t. x)" begin 
+        diffexpdist! = LevelSets.diffexpdist!
+        hessexpdist! = LevelSets.hessexpdist!
+        dim = 3
+        delta = 1e-8
+        x = randn(dim)
+        xc = randn(dim)
+        rho = rand()
+        min_dist = rand()
+        # get the analytical Hessian
+        hess = zeros(dim, dim)
+        hessexpdist!(hess, x, xc, rho, delta, min_dist)
+        # get the Hessian using dual numbers 
+        x_dual = dual.(x, 0.0)
+        xc_dual = dual.(xc, 0.0)
+        rho_dual = dual.(rho, 0.0)
+        delta_dual = dual.(delta, 0.0)
+        min_dist_dual = dual.(min_dist, 0.0)
+        x_bar_dual = zero(x_dual)
+        for d = 1:dim 
+            # get derivative with respect to x[d]
+            x_dual[d] += dual.(0.0, 1.0)
+            fill!(x_bar_dual, zero(Dual128))
+            diffexpdist!(x_bar_dual, x_dual, xc_dual, rho_dual, delta_dual, 
+                         min_dist_dual, dual.(1.0, 0.0))
+            for d2 = 1:dim 
+                @test isapprox(hess[d,d2], epsilon.(x_bar_dual[d2]))
+            end
+            x_dual[d] -= dual.(0.0, 1.0) 
+        end
+    end
+
     @testset "Test difflevelset! (w.r.t. LevelSet parameters)" begin
         dim = 3
         numbasis = 10
@@ -207,6 +298,40 @@ using StaticArrays
         end
     end    
     
+    @testset "Test hessianlevelset! (w.r.t. x)" begin 
+        dim = 3
+        numbasis = 10
+        xc = randn(dim, numbasis)
+        nrm = randn(dim, numbasis)
+        tang = randn(dim, dim-1, numbasis)
+        crv = randn(dim-1, numbasis)
+        rho = rand()
+        levset = LevelSet{3,Float64}(xc, nrm, tang, crv, rho)
+        x = randn(dim)
+        # get the analytical hessian
+        hess = zeros(dim, dim)
+        LevelSets.hessianlevelset!(hess, x, levset)
+        # get the Hessian using Dual numbers
+        xc_dual = dual.(xc, 0.0)
+        nrm_dual = dual.(nrm, 0.0)
+        tang_dual = dual.(tang, 0.0)
+        crv_dual = dual.(crv, 0.0)
+        rho_dual = dual.(rho, 0.0)        
+        levset_dual = LevelSet{3,Dual128}(xc_dual, nrm_dual, tang_dual, 
+                                          crv_dual, rho_dual)
+        x_dual = dual.(x, 0.0)
+        x_bar_dual = zero(x_dual)
+        for d = 1:dim 
+            x_dual[d] += dual.(0.0, 1.0)
+            fill!(x_bar_dual, zero(Dual128))
+            difflevelset!(x_bar_dual, x_dual, levset_dual)
+            for d2 = 1:dim
+                @test isapprox(hess[d,d2], epsilon.(x_bar_dual[d2]))
+            end
+            x_dual[d] -= dual.(0.0, 1.0)
+        end
+    end
+
     @testset "Test findclosest!" begin 
         # Construct a level-set approximation of the circle, and then find the 
         # closest point
