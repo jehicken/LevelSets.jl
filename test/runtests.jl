@@ -332,12 +332,12 @@ using StaticArrays
         end
     end
 
-    @testset "Test findclosest!" begin 
-        # Construct a level-set approximation of the circle, and then find the 
-        # closest point
-        findclosest! = LevelSets.findclosest!
+    @testset "Test snappoint!" begin 
+        # Construct a level-set approximation of the circle, and then snap a 
+        # point
+        snappoint! = LevelSets.snappoint!
         dim = 2
-        numbasis = 20
+        numbasis = 12
         xc = zeros(dim, numbasis)
         nrm = zeros(dim, numbasis)
         tang = zeros(dim, dim-1, numbasis)
@@ -355,12 +355,44 @@ using StaticArrays
 
         x0 = [2.0; 2.0]
         x = zero(x0)
-        findclosest!(x, x0, levset, max_newton=20)
-        println("x = ", x)
-        @test isapprox(x, [1/sqrt(2); 1/sqrt(2)])
+        snappoint!(x, x0, levset, max_newton=20)
+        #println("x = ", x)
+        @test isapprox(x, [0.707504186768092; 0.7075041867680917])
 
+        # 3d test 
+        a, b, c = 2.0, 1.0, 0.5
+        dim = 3
+        numu = 10
+        numv = 10
+        numbasis = numu*numv 
+        xc = zeros(dim, numbasis)
+        nrm = zeros(dim, numbasis)
+        tang = zeros(dim, dim-1, numbasis)
+        crv = zeros(dim-1, numbasis)
+        for i = 1:numu 
+            u = 2*pi*(i-0.5)/numu
+            for j = 1:numv 
+                v = pi*(j-0.5)/numv 
+                n = numv*(i-1) + j
+                xc[:, n] = [a*cos(u)*sin(v) + a; b*sin(u)*sin(v) + b; 
+                            c*cos(v) + c]
+                du = [-a*sin(u)*sin(v); b*cos(u)*sin(v); 0.0]
+                dv = [a*cos(u)*cos(v); b*sin(u)*cos(v); -c*sin(v)]
+                nrm[:, n] = -cross(du, dv)
+                tang[:,1,n] = du 
+                tang[:,2,n] = dv
+            end
+        end
+        rho = 10.0*numbasis
+        levset = LevelSet{3,Float64}(xc, nrm, tang, crv, rho)
+        x0 = [3.0; 3.0; 3.0]
+        x = zero(x0)
+        snappoint!(x, x0, levset, max_newton=20)
+        #println("x = ", x)
+        @test isapprox(x, [2.640260656582881, 2.0097225431578574,
+                           0.6150832161362152])
+    end 
 
-    end
 
     if false
     @testset "Test residual!" begin

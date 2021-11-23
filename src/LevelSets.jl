@@ -210,65 +210,96 @@ function evallevelset(x::AbstractArray{T,1},
 end
 
 """
-    findclosest!(x, x0, levset[, tol=1e-12, max_newton=10])
+    snappoint!(x, x0, levset[, tol=1e-12, max_newton=20])
 
-Compute the point `x` that is on the zero level contour and closest to `x0`.
+Find a point on the level set that is "close" to `x0`.  The solution, `x`, 
+satisfies `|phi(x)| < tol`.  However, `x` may not be the point on the level set 
+that is closest to `x0`.
 """
-function findclosest!(x::AbstractArray{T,1}, x0::AbstractArray{T,1},
-                      levset::LevelSet{Dim,T}; tol::Float64=1e-12,
-                      max_newton::Int=10) where {Dim,T<:Number}
+function snappoint!(x::AbstractArray{T,1}, x0::AbstractArray{T,1},
+                    levset::LevelSet{Dim,T}; tol::Float64=1e-12,
+                    max_newton::Int=20) where {Dim,T<:Number}
     @assert(size(x,1) == Dim, "x inconsistent with levset")
     @assert(size(x0,1) == Dim, "x inconsistent with levset")
-    # use the closest center as the initial guess
-    min_dist = 1e100
-    min_idx = -1
-    @inbounds for i = 1:levset.numbasis 
-        xc = view(levset.xcenter, :, i)
-        dist = sqrt(dot(x0 - xc, x0 - xc) + levset.delta)
-        if dist < min_dist 
-            min_dist = dist 
-            min_idx = i 
-        end
-    end
-    x[:] = levset.xcenter[:,min_idx]
+    x[:] = x0
     x_bar = zero(x)
-    A = zeros(T, (Dim+1, Dim+1))
-    for i = 1:Dim
-        A[i,i] = one(T)
-    end
-    b = zeros(T, (Dim+1))
-    # Solve the constrained minimization problem
-    hess = view(A, 1:Dim, 1:Dim)
-    xc = view(levset.xcenter, :, min_idx)
-    frm = view(levset.frame, :, :, min_idx)
-    crv = view(levset.kappa, :, min_idx)
-    lambda = zero(T)
-    for n = 1:max_newton
-        # check for convergence
-        fill!(x_bar, zero(T))
-        difflevelset!(x_bar, x, levset)
+    for n = 1:max_newton 
         phi = evallevelset(x, levset)
-        b[1:Dim] = x0 - x - lambda*x_bar
-        b[end] = -phi
-        println("iter: ",n,": norm(dLdx) = ",norm(b[1:Dim]),": phi = ",-b[end])
-        if norm(b[1:Dim]) < tol && abs(phi) < tol 
-            return
+        #println("iter: ",n,": phi = ",phi)
+        if abs(phi) < tol 
+            return 
         end
-        fill!(A, zero(T))
-        hessianlevelset!(hess, x, levset)
-        hess[:,:] *= lambda
-        #A[1:Dim,1:Dim] += I
-        for i = 1:Dim
-            hess[i,i] += one(T)
-        end 
-        A[1:Dim,end] = x_bar
-        A[end,1:Dim] = x_bar
-        sol = A\b
-        x[:] += sol[1:Dim]
-        lambda += sol[end]
+        difflevelset!(x_bar, x, levset)
+        x[:] -= phi*x_bar/norm(x_bar)
     end
     error("Newton failed to converge in findclosest")
-end
+end 
+
+# function findclosest!(x::AbstractArray{T,1}, x0::AbstractArray{T,1},
+#                       levset::LevelSet{Dim,T}; tol::Float64=1e-12,
+#                        max_newton::Int=10) where {Dim,T<:Number}
+#     @assert(size(x,1) == Dim, "x inconsistent with levset")
+#     @assert(size(x0,1) == Dim, "x inconsistent with levset")
+#     # use the closest center as the initial guess
+#     min_dist = 1e100
+#     min_idx = -1
+#     @inbounds for i = 1:levset.numbasis 
+#         xc = view(levset.xcenter, :, i)
+#         dist = sqrt(dot(x0 - xc, x0 - xc) + levset.delta)
+#         if dist < min_dist 
+#             min_dist = dist 
+#             min_idx = i 
+#         end
+#     end
+#     x[:] = levset.xcenter[:,min_idx]
+#     step_max = sqrt(dot(x-x0, x-x0) - dot(levset.frame[:,1,min_idx], x - x0)^2)
+#     step_max *= 0.25
+#     println("x init = ",x[:],": step_max = ",step_max)
+#     x_bar = zero(x)
+#     A = zeros(T, (Dim+1, Dim+1))
+#     for i = 1:Dim
+#         A[i,i] = one(T)
+#     end
+#     b = zeros(T, (Dim+1))
+#     # Solve the constrained minimization problem
+#     hess = view(A, 1:Dim, 1:Dim)
+#     xc = view(levset.xcenter, :, min_idx)
+#     frm = view(levset.frame, :, :, min_idx)
+#     crv = view(levset.kappa, :, min_idx)
+#     lambda = zero(T)
+#     max_line_search = 10
+#     for n = 1:max_newton
+#         # check for convergence
+#         fill!(x_bar, zero(T))
+#         difflevelset!(x_bar, x, levset)
+#         phi = evallevelset(x, levset)
+#         if n == 1
+#             lambda = dot(x_bar, x0 - x)/dot(x_bar, x_bar)
+#         end
+#         b[1:Dim] = x0 - x - lambda*x_bar
+#         b[end] = -phi
+#         println("iter: ",n,": norm(dLdx) = ",norm(b[1:Dim]),": phi = ",-b[end])
+#         if norm(b[1:Dim]) < tol && abs(phi) < tol 
+#             return
+#         end
+#         fill!(A, zero(T))
+#         hessianlevelset!(hess, x, levset)
+#         hess[:,:] *= lambda
+#         #A[1:Dim,1:Dim] += I
+#         for i = 1:Dim
+#             hess[i,i] += one(T)
+#         end 
+#         A[1:Dim,end] = x_bar
+#         A[end,1:Dim] = x_bar
+#         sol = A\b            
+#         if norm(sol) > step_max
+#             sol *= step_max/norm(sol)
+#         end
+#         x[:] += sol[1:Dim]
+#         lambda += sol[end]
+#     end
+#     error("Newton failed to converge in findclosest")
+# end
 
 """
     ls, bound = boundlevelset!(x, dx, levset)
