@@ -4,7 +4,10 @@ module LevelSets
 using LinearAlgebra
 using StaticArrays
 
-export LevelSet, evallevelset, difflevelset!, hessianlevelset!, fitlevelset!
+export LevelSet
+export evallevelset, snappoint!
+export difflevelset!, hessianlevelset!
+export fitlevelset!
 export boundlevelset, boundlevelsetgrad!
 
 "Data required by smooth-max level-set function."
@@ -218,21 +221,25 @@ that is closest to `x0`.
 """
 function snappoint!(x::AbstractArray{T,1}, x0::AbstractArray{T,1},
                     levset::LevelSet{Dim,T}; tol::Float64=1e-12,
-                    max_newton::Int=20) where {Dim,T<:Number}
+                    max_newton::Int=20, silent_fail::Bool=false
+                    ) where {Dim,T<:Number}
     @assert(size(x,1) == Dim, "x inconsistent with levset")
     @assert(size(x0,1) == Dim, "x inconsistent with levset")
     x[:] = x0
     x_bar = zero(x)
+    phi = evallevelset(x, levset)
     for n = 1:max_newton 
-        phi = evallevelset(x, levset)
         #println("iter: ",n,": phi = ",phi)
         if abs(phi) < tol 
             return 
         end
         difflevelset!(x_bar, x, levset)
         x[:] -= phi*x_bar/norm(x_bar)
+        phi = evallevelset(x, levset)
     end
-    error("Newton failed to converge in findclosest")
+    if silent_fail return end
+    println("x0 = ",x0,": x = ",x,": phi = ",phi)
+    error("Newton failed to converge in snappoint!")
 end 
 
 # function findclosest!(x::AbstractArray{T,1}, x0::AbstractArray{T,1},
