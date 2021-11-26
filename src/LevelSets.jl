@@ -3,12 +3,19 @@ module LevelSets
 
 using LinearAlgebra
 using StaticArrays
+using NearestNeighbors
+using DualNumbers
 
 export LevelSet
 export evallevelset, snappoint!
 export difflevelset!, hessianlevelset!
 export fitlevelset!
 export boundlevelset, boundlevelsetgrad!
+
+# this might be in the lastest version of Julia, need to check
+import Base.eps
+eps(::Type{Complex{T}}) where T <: AbstractFloat = eps(T)
+eps(::Complex{T}) where T <: AbstractFloat = eps(T)
 
 "Data required by smooth-max level-set function."
 mutable struct LevelSet{Dim,T<:Number}
@@ -24,6 +31,8 @@ mutable struct LevelSet{Dim,T<:Number}
     rho::T
     "Parameter that smooths distance near zero"
     delta::T
+    "tree used to accelerate the evaluation of the levelset"
+    tree::KDTree{SVector{Dim,Float64}, Euclidean, Float64}
 
     function LevelSet{Dim,T}(xcenter::AbstractArray{T,2},
                              normal::AbstractArray{T,2},
@@ -53,7 +62,8 @@ mutable struct LevelSet{Dim,T<:Number}
             end
         end
         delta = 1e-10
-        new(numbasis, xc, frm, kap, rho, delta)
+        tree = KDTree(realpart.(xc))
+        new(numbasis, xc, frm, kap, rho, delta, tree)
     end 
 end
 
@@ -183,6 +193,13 @@ function hesslocallevelset!(hess::AbstractArray{T,2},
     end
 end
 
+function getnearest(x::AbstractArray{T,1}, levset::LevelSet{Dim,T}
+                    )::Tuple{Vector{Int64}, T} where {Dim,T<:Number}
+    k = min(10, levset.numbasis)
+    nearest, dists = knn(levset.tree, realpart.(x), k)
+    return nearest, minimum(dists)
+end 
+
 """
     ls = evallevelset(x, levset)
 
@@ -193,13 +210,21 @@ function evallevelset(x::AbstractArray{T,1},
     @assert(size(x,1) == Dim, "x inconsistent with levset")
     numer = zero(T)
     denom = zero(T)
-    min_dist = 1e100
-    @inbounds for i = 1:levset.numbasis 
-        xc = view(levset.xcenter, :, i)
-        dist = sqrt(dot(x - xc, x - xc) + levset.delta)
-        min_dist = min(min_dist, dist)
-    end
-    @inbounds for i = 1:levset.numbasis
+    nearest, min_dist = getnearest(x, levset)
+    #range = -log(eps(T))/levset.rho
+    #nearest = inrange(levset.tree, x, range)
+    #min_dist = 1e100
+    #@inbounds for i in nearest
+    #    xc = view(levset.xcenter, :, i)
+    #    dist = sqrt(dot(x - xc, x - xc) + levset.delta)
+    #    min_dist = min(min_dist, dist)
+    #end 
+    #@inbounds for i = 1:levset.numbasis 
+    #    xc = view(levset.xcenter, :, i)
+    #    dist = sqrt(dot(x - xc, x - xc) + levset.delta)
+    #    min_dist = min(min_dist, dist)
+    #end
+    @inbounds for i in nearest # i = 1:levset.numbasis
         xc = view(levset.xcenter, :, i)
         frm = view(levset.frame, :, :, i)
         crv = view(levset.kappa, :, i)
@@ -413,13 +438,14 @@ function difflevelset!(xcenter_bar::AbstractArray{T,2},
     # forward sweep 
     numer = zero(T)
     denom = zero(T)
-    min_dist = 1e100
-    @inbounds for i = 1:levset.numbasis 
-        xc = view(levset.xcenter, :, i)
-        dist = sqrt(dot(x - xc, x - xc) + levset.delta)
-        min_dist = min(min_dist, dist)
-    end
-    @inbounds for i = 1:levset.numbasis
+    nearest, min_dist = getnearest(x, levset)
+    #min_dist = 1e100
+    #@inbounds for i = 1:levset.numbasis 
+    #    xc = view(levset.xcenter, :, i)
+    #    dist = sqrt(dot(x - xc, x - xc) + levset.delta)
+    #    min_dist = min(min_dist, dist)
+    #end
+    @inbounds for i in nearest # = 1:levset.numbasis
         xc = view(levset.xcenter, :, i)
         frm = view(levset.frame, :, :, i)
         crv = view(levset.kappa, :, i)
@@ -434,7 +460,7 @@ function difflevelset!(xcenter_bar::AbstractArray{T,2},
     # ls = numer/denom 
     numer_bar = ls_bar/denom 
     denom_bar = -ls_bar*ls/denom
-    @inbounds for i = 1:levset.numbasis
+    @inbounds for i in nearest # = 1:levset.numbasis
         xc = view(levset.xcenter, :, i)
         xc_bar = view(xcenter_bar, :, i)
         frm = view(levset.frame, :, :, i)
@@ -477,13 +503,14 @@ function difflevelset!(x_bar::AbstractArray{T,1}, x::AbstractArray{T,1},
     # forward sweep 
     numer = zero(T)
     denom = zero(T)
-    min_dist = 1e100
-    @inbounds for i = 1:levset.numbasis 
-        xc = view(levset.xcenter, :, i)
-        dist = sqrt(dot(x - xc, x - xc) + levset.delta)
-        min_dist = min(min_dist, dist)
-    end
-    @inbounds for i = 1:levset.numbasis
+    nearest, min_dist = getnearest(x, levset)
+    #min_dist = 1e100
+    #@inbounds for i = 1:levset.numbasis 
+    #    xc = view(levset.xcenter, :, i)
+    #    dist = sqrt(dot(x - xc, x - xc) + levset.delta)
+    #    min_dist = min(min_dist, dist)
+    #end
+    @inbounds for i in nearest # = 1:levset.numbasis
         xc = view(levset.xcenter, :, i)
         frm = view(levset.frame, :, :, i)
         crv = view(levset.kappa, :, i)
@@ -500,7 +527,7 @@ function difflevelset!(x_bar::AbstractArray{T,1}, x::AbstractArray{T,1},
     # ls = numer/denom 
     numer_bar = ls_bar/denom 
     denom_bar = -ls_bar*ls/denom
-    @inbounds for i = 1:levset.numbasis
+    @inbounds for i in nearest # = 1:levset.numbasis
         xc = view(levset.xcenter, :, i)
         frm = view(levset.frame, :, :, i)
         crv = view(levset.kappa, :, i)
