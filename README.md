@@ -5,7 +5,7 @@
 [![Build Status](https://github.com/jehicken/LevelSets.jl/workflows/CI/badge.svg)](https://github.com/jehicken/LevelSets.jl/actions)
 [![Coverage](https://codecov.io/gh/jehicken/LevelSets.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/jehicken/LevelSets.jl)
 
-![](wreath.png){ "Level-set example" }
+![](wreath.png "Level-set example" )
 
 This package implements the level-set formula described in Hicken J. and Kaur S., "_An Explicit Level-Set Formula to Approximate Geometries_," Proceedings of the AIAA 2022 SciTech Forum.  Please see the paper for further details.
 
@@ -68,12 +68,7 @@ function plotEllipsoid(numu::Int, numv::Int, rhofactor::Float64;
                        quad::Bool=false, a::Float64=2.0, b::Float64=0.5, 
                        c::Float64=1.0)
     
-    # define axes lengths
-    a, b, c = 2.0, 0.5, 1.0
-    
     # sample the ellipsoid to get the centers and frame 
-    numu = 80
-    numv = 80
     numbasis = numu*numv 
     xc = zeros(3, numbasis)
     nrm = zero(xc)
@@ -127,7 +122,6 @@ function plotEllipsoid(numu::Int, numv::Int, rhofactor::Float64;
     println("max curvature ratio = ",max_ratio)
     
     # construct the LevelSet 
-    rhofactor = 10
     rho = rhofactor*convert(Float64, numu)
     levset = LevelSet{3,Float64}(xc, nrm, tang, crv, rho)
     
