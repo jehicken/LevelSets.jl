@@ -782,9 +782,9 @@ end
 Evaluate the level-set defined by `levset` at points `x`, and store in `res`
 """
 function residual!(res::AbstractArray{T,1}, x::AbstractArray{T,2},
-                   levset::LevelSet{T}) where {T<:Number}
+                   levset::LevelSet{Dim,T}) where {Dim,T<:Number}
     @assert(size(res,1) == size(x,2), "res and x have inconsistent dimensions")
-    @assert(size(x,1) == size(levset.xcenter,1), "x inconsisent with levset")
+    @assert(size(x,1) == Dim, "x inconsisent with levset")
     @inbounds for j = 1:size(x,2)
         res[j] = evallevelset(view(x,:,j), levset)
     end
