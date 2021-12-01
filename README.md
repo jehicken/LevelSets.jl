@@ -45,7 +45,6 @@ function principals(E::Float64, F::Float64, G::Float64, L::Float64,
     else 
         lambda1[2] = 1.0
         lambda1[1] = 0.0
-        #error("lambda1 is not defined?")
     end 
     if abs(N - kappa2*G) > tol
         lambda2[2] = - (M - kappa2*F)/(N - kappa2*G)
@@ -54,7 +53,6 @@ function principals(E::Float64, F::Float64, G::Float64, L::Float64,
     else 
         lambda2[2] = 1.0
         lambda2[1] = 0.0
-        #error("lambda2 is not defined?")
     end
     return kappa1, kappa2, lambda1, lambda2
 end
