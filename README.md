@@ -9,7 +9,9 @@
 
 This package implements the level-set formula described in Hicken J. and Kaur S., "_An Explicit Level-Set Formula to Approximate Geometries_," Proceedings of the AIAA 2022 SciTech Forum.  Please see the paper for further details.
 
-The tests in `test/runtestss.jl` offer some examples of how to use the package; however, the following module provides a model application to the ellipsoid.  You will need the `WriteVTK` and `PyPlot` packages to run the functions in this example.
+This is an unregistered package, so you will need to follow [these steps](https://pkgdocs.julialang.org/v1/managing-packages/#Adding-unregistered-packages) from the Julia documentation to add `LevelSets.jl`.
+
+The tests in `test/runtestss.jl` offer some examples of how to use the package.  The following module provides a model application to the ellipsoid that might be helpful.  You will need the `WriteVTK` and `PyPlot` packages to run the functions in this example.
 
 ```julia
 module Ellipsoid
