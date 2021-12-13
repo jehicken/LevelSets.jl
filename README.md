@@ -7,7 +7,7 @@
 
 ![](wreath.png "Level-set example" )
 
-This package implements the level-set formula described in Hicken J. and Kaur S., "_An Explicit Level-Set Formula to Approximate Geometries_," Proceedings of the AIAA 2022 SciTech Forum.  Please see the paper for further details.
+This package implements the level-set formula described in Hicken J. and Kaur S., "_An Explicit Level-Set Formula to Approximate Geometries_," Proceedings of the AIAA 2022 SciTech Forum.  Please see the paper and/or the [video](https://youtu.be/sJOM-70KKQI) for further details.
 
 This is an unregistered package, so you will need to follow [these steps](https://pkgdocs.julialang.org/v1/managing-packages/#Adding-unregistered-packages) from the Julia documentation to add `LevelSets.jl`.
 
