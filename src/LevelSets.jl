@@ -7,7 +7,7 @@ using NearestNeighbors
 using DualNumbers
 
 export LevelSet
-export evallevelset, snappoint!
+export evallevelset, snappoint!, findclosest!
 export difflevelset!, hessianlevelset!
 export fitlevelset!
 export boundlevelset, boundlevelsetgrad!
@@ -224,7 +224,7 @@ function evallevelset(x::AbstractArray{T,1},
     #    dist = sqrt(dot(x - xc, x - xc) + levset.delta)
     #    min_dist = min(min_dist, dist)
     #end
-    @inbounds for i in nearest # i = 1:levset.numbasis
+    @inbounds for i = 1:levset.numbasis # for i in nearest 
         xc = view(levset.xcenter, :, i)
         frm = view(levset.frame, :, :, i)
         crv = view(levset.kappa, :, i)
@@ -262,10 +262,32 @@ function snappoint!(x::AbstractArray{T,1}, x0::AbstractArray{T,1},
         x[:] -= phi*x_bar/norm(x_bar)
         phi = evallevelset(x, levset)
     end
+    println("Newton failed to converge in snappoint!")
+    println("x0 = ",x0,": x = ",x,": phi = ",phi)
     if silent_fail return end
     println("x0 = ",x0,": x = ",x,": phi = ",phi)
     error("Newton failed to converge in snappoint!")
 end 
+
+function findclosest!(x::AbstractArray{T,1}, x0::AbstractArray{T,1},
+                      levset::LevelSet{Dim,T}; tol::Float64=1e-12,
+                      max_newton::Int=10) where {Dim,T<:Number}
+    nearest, min_dist = nn(levset.tree, x0)
+    x[:] = levset.xcenter[:, nearest]
+    phi = evallevelset(x, levset)
+    grad_phi = zeros(Dim)
+    for k = 1:max_newton 
+        if abs(phi) < tol 
+            return true 
+        end 
+        difflevelset!(grad_phi, x, levset)
+        norm2_grad_phi = norm(grad_phi)^2
+        x[:] = x0 + grad_phi*(dot(grad_phi, x - x0) - phi)/norm2_grad_phi 
+        phi = evallevelset(x, levset)
+    end 
+    # if we get here, convergence failed 
+    return false
+end
 
 # function findclosest!(x::AbstractArray{T,1}, x0::AbstractArray{T,1},
 #                       levset::LevelSet{Dim,T}; tol::Float64=1e-12,
@@ -334,15 +356,74 @@ end
 # end
 
 """
-    ls, bound = boundlevelset!(x, dx, levset)
+    ls, bound = boundlevelset(x, dx, levset)
 
 Return level-set value and bound defined by `levset`, over the element centered
 at `x` and with half side lengths `dx`.
 """
 function boundlevelset(x::AbstractArray{T,1}, dx::AbstractArray{T,1},
-                       levset::LevelSet{T}) where {T<:Number}
-    @assert(size(x,1) == size(levset.xcenter,1), "x inconsistent with levset")
-    @assert(size(dx,1) == size(levset.xcenter,1),"dx inconsistent with levset")
+                       levset::LevelSet{Dim,T}) where {Dim,T<:Number}
+    @assert(size(x,1) == Dim, "x inconsistent with levset")
+    @assert(size(dx,1) == Dim, "dx inconsistent with levset")
+    numer = zero(T)
+    denom = zero(T)
+    nearest, min_dist = getnearest(x, levset)
+    # evaluate the basis functions at the point x
+    work = zeros(T, levset.numbasis) # should be in levset to avoid allocations 
+    @inbounds for i = 1:levset.numbasis
+        xc = view(levset.xcenter, :, i)
+        frm = view(levset.frame, :, :, i)
+        crv = view(levset.kappa, :, i)
+        perp = locallevelset(x, xc, frm, crv)
+        expfac = expdist(x, xc, levset.rho, levset.delta, min_dist)
+        work[i] = expfac 
+        numer += perp*expfac
+        denom += expfac
+    end
+    ls = numer/denom
+    L = norm(dx)
+    factor = exp(2.0*levset.rho*L)
+    converge_bound = 0.0
+    tight_bound = 0.0
+    @inbounds for i = 1:levset.numbasis 
+        xc = view(levset.xcenter, :, i)
+        frm = view(levset.frame, :, :, i)
+        crv = view(levset.kappa, :, i)
+        # finish computing psi_i at x 
+        work[i] /= denom 
+
+        # get various bounds on psi_i 
+        psi_upper = min(1.0, work[i]*factor)
+        psi_lower = work[i]/factor
+        dpsi = max(psi_upper - work[i], work[i] - psi_lower)
+
+        # get local distance function value and bound on difference 
+        perp = locallevelset(x, xc, frm, crv)
+        dperp = L 
+        for j = 1:Dim-1 
+            dperp += abs(crv[j])*(L*abs(dot(frm[:,j+1], x - xc)) + 0.5*L^2)
+        end
+
+        # Add to the convergent bound 
+        converge_bound += abs(perp)*dpsi + psi_upper*dperp 
+
+        # Add to the tight bound 
+        tight_bound += (abs(perp - ls) + dperp)*psi_upper
+    end
+
+    return ls, min(converge_bound, tight_bound)
+end
+
+"""
+    ls, bound = boundlevelset2(x, dx, levset)
+
+Return level-set value and bound defined by `levset`, over the element centered
+at `x` and with half side lengths `dx`.
+"""
+function boundlevelset2(x::AbstractArray{T,1}, dx::AbstractArray{T,1},
+                        levset::LevelSet{Dim,T}) where {Dim,T<:Number}
+    @assert(size(x,1) == Dim, "x inconsistent with levset")
+    @assert(size(dx,1) == Dim,"dx inconsistent with levset")
     min_dist = 1e100
     @inbounds for i = 1:levset.numbasis 
         xc = view(levset.xcenter, :, i)
@@ -395,7 +476,7 @@ function boundlevelset(x::AbstractArray{T,1}, dx::AbstractArray{T,1},
             d_min = min(d_min, perp) 
             d_max = max(d_max, perp)
         end
-        bound += max(d_max - ls, -d_min + ls)*min(work[i]*factor, 1)
+        #bound += max(d_max - ls, -d_min + ls)*min(work[i]*factor, 1)
         #lower = min(lower, d_min) 
         upper = max(upper, d_max)
         if d_min < 0.0 
@@ -403,6 +484,9 @@ function boundlevelset(x::AbstractArray{T,1}, dx::AbstractArray{T,1},
         else 
             lower += d_min*work[i]/factor
         end 
+        perp = locallevelset(x, xc, frm, crv)
+        dpsi = max( min(1.0, work[i]*fac) - work[i], work[i] - work[i]/fac)
+        bound += abs(perp)*dpsi + work[i]*L 
         # if d_max < 0.0 
         #     upper += d_max*work[i]/factor
         # else 
@@ -510,7 +594,7 @@ function difflevelset!(x_bar::AbstractArray{T,1}, x::AbstractArray{T,1},
     #    dist = sqrt(dot(x - xc, x - xc) + levset.delta)
     #    min_dist = min(min_dist, dist)
     #end
-    @inbounds for i in nearest # = 1:levset.numbasis
+    @inbounds for i = 1:levset.numbasis #in nearest # = 1:levset.numbasis
         xc = view(levset.xcenter, :, i)
         frm = view(levset.frame, :, :, i)
         crv = view(levset.kappa, :, i)
@@ -527,7 +611,7 @@ function difflevelset!(x_bar::AbstractArray{T,1}, x::AbstractArray{T,1},
     # ls = numer/denom 
     numer_bar = ls_bar/denom 
     denom_bar = -ls_bar*ls/denom
-    @inbounds for i in nearest # = 1:levset.numbasis
+    @inbounds for i = 1:levset.numbasis # in nearest # = 1:levset.numbasis
         xc = view(levset.xcenter, :, i)
         frm = view(levset.frame, :, :, i)
         crv = view(levset.kappa, :, i)
@@ -782,9 +866,9 @@ end
 Evaluate the level-set defined by `levset` at points `x`, and store in `res`
 """
 function residual!(res::AbstractArray{T,1}, x::AbstractArray{T,2},
-                   levset::LevelSet{T}) where {T<:Number}
+                   levset::LevelSet{Dim,T}) where {Dim,T<:Number}
     @assert(size(res,1) == size(x,2), "res and x have inconsistent dimensions")
-    @assert(size(x,1) == size(levset.xcenter,1), "x inconsisent with levset")
+    @assert(size(x,1) == Dim, "x inconsisent with levset")
     @inbounds for j = 1:size(x,2)
         res[j] = evallevelset(view(x,:,j), levset)
     end
