@@ -393,8 +393,6 @@ using StaticArrays
                            0.6150832161362152])
     end 
 
-
-    if false
     @testset "Test residual!" begin
         # This is a simple test: for a single "basis" in the LevelSet, any 
         # point `x` such that `x - xc` is perpendicular to `nrm` will be on the 
@@ -403,71 +401,20 @@ using StaticArrays
         numbasis = 1
         xc = randn(dim, numbasis)
         nrm = randn(dim, numbasis)
+        tang = randn(dim, dim-1, numbasis)
+        crv = zeros(dim-1, numbasis)
         rho = rand()
-        levset = LevelSet{Float64}(xc, nrm, rho)
+        levset = LevelSet{3,Float64}(xc, nrm, tang, crv, rho)
         numpts = 10
         # get some points on the plane perpendicular to `nrm`
         x = randn(dim, numpts)
         for j = 1:numpts 
             dx = x[:,j] - xc
-            x[:,j] -= dot(dx, levset.normal[:,1])*levset.normal[:,1]
+            x[:,j] -= dot(dx, levset.frame[:,1,1])*levset.frame[:,1,1]
         end
         res = zeros(numpts)
         LevelSets.residual!(res, x, levset) 
         @test isapprox(res, zeros(numpts), atol=1e-13)
     end
-    
-    # @testset "Test parameterindices" begin 
-    #     dim = 2
-    #     numbasis = 3
-    #     xc = randn(dim, numbasis)
-    #     nrm = randn(dim, numbasis)
-    #     len = randn(numbasis)
-    #     levset = LevelSet{Float64}(xc, nrm, len)
-    #     xc_idx, nrm_idx, len_idx = LevelSets.parameterindices(levset)        
-    #     for i = 1:numbasis 
-    #         for d = 1:dim
-    #             @test xc_idx[d,i] == (i-1)*(2*dim+1) + d
-    #             @test nrm_idx[d,i] == (i-1)*(2*dim+1) + dim + d 
-    #         end
-    #         @test len_idx[i] == (i-1)*(2*dim+1) + 2*dim + 1
-    #     end
-    # end
-    
-    @testset "Test jacobian!" begin 
-        dim = 3
-        numbasis = 10
-        xc = randn(dim, numbasis)
-        nrm = randn(dim, numbasis)
-        rho = rand()
-        levset = LevelSet{Float64}(xc, nrm, rho)
-        numpts = 20
-        x = randn(dim, numpts)
-        # compute the Jacobian using reverse mode 
-        jac = zeros(numpts, dim*numbasis + 1)
-        LevelSets.jacobian!(jac, x, levset)
-        # compuate the entries in the Jacobian using Dual numbers 
-        xc_dual = dual.(xc, 0.0)
-        nrm_dual = dual.(nrm, 0.0)
-        rho_dual = dual.(rho, 0.0)
-        x_dual = dual.(x, 0.0)
-        levset_dual = LevelSet{Dual128}(xc_dual, nrm_dual, rho_dual)
-        res_dual = dual.(zeros(numpts), 0.0)
-        for i = 1:numbasis
-            for d = 1:dim
-                # derivative w.r.t. xcenter[d,i]
-                levset_dual.xcenter[d,i] += dual.(0.0, 1.0)
-                LevelSets.residual!(res_dual, x_dual, levset_dual)
-                @test isapprox(jac[:,(i-1)*dim + d], epsilon.(res_dual))
-                levset_dual.xcenter[d,i] -= dual.(0.0, 1.0)
-            end
-        end
-        # derivative w.r.t. rho 
-        rho_dual += dual.(0.0, 1.0)
-        levset_dual = LevelSet{Dual128}(xc_dual, nrm_dual, rho_dual)
-        LevelSets.residual!(res_dual, x_dual, levset_dual)
-        @test isapprox(jac[:,dim*numbasis+1], epsilon.(res_dual))
-    end
    
-    end
 end
