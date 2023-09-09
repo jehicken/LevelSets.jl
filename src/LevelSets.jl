@@ -8,6 +8,7 @@ using DualNumbers
 
 export LevelSet
 export evallevelset, snappoint!, findclosest!
+export boundlevelset
 export difflevelset!, hessianlevelset!
 
 import Base.eps
